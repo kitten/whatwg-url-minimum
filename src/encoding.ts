@@ -1,0 +1,260 @@
+// See: https://github.com/jsdom/whatwg-url/blob/v15.1.0/lib/encoding.js
+
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder('utf-8', { ignoreBOM: true });
+
+export function utf8Encode(string: string): Uint8Array {
+  return utf8Encoder.encode(string);
+}
+
+export function utf8Decode(bytes: Uint8Array): string {
+  return utf8Decoder.decode(bytes);
+}
+
+// See: https://github.com/jsdom/whatwg-url/blob/v15.1.0/lib/percent-encoding.js
+
+// https://url.spec.whatwg.org/#percent-encode
+function percentEncode(c: number): string {
+  const hex = c.toString(16).toUpperCase();
+  return hex.length === 1 ? `%0${hex}` : `%${hex}`;
+}
+
+export function decodeHexDigit(c: number): number {
+  if (c >= 0x30 && c <= 0x39 /*0-9*/) {
+    return c - 0x30;
+  } else if (c >= 0x41 && c <= 0x46 /*A-F*/) {
+    return c - 0x41 + 10;
+  } else if (c >= 0x61 && c <= 0x66 /*a-f*/) {
+    return c - 0x61 + 10;
+  } else {
+    return -1;
+  }
+}
+
+// https://url.spec.whatwg.org/#percent-decode
+export function percentDecodeBytes(input: Uint8Array): Uint8Array {
+  const output = new Uint8Array(input.byteLength);
+  let outputIndex = 0;
+  for (let i = 0; i < input.byteLength; ++i) {
+    const byte = input[i];
+    if (byte !== 0x25 /*'%'*/) {
+      output[outputIndex++] = byte;
+    } else {
+      const hi = decodeHexDigit(input[i + 1]);
+      const lo = decodeHexDigit(input[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        output[outputIndex++] = (hi << 4) | lo;
+        i += 2;
+      } else {
+        output[outputIndex++] = byte;
+      }
+    }
+  }
+  return output.slice(0, outputIndex);
+}
+
+// https://url.spec.whatwg.org/#string-percent-decode
+export function percentDecodeString(input: string): Uint8Array {
+  const bytes = utf8Encode(input);
+  return percentDecodeBytes(bytes);
+}
+
+// https://url.spec.whatwg.org/#c0-control-percent-encode-set
+export function isC0ControlPercentEncode(c: number): boolean {
+  return c <= 0x1f || c > 0x7e;
+}
+
+// https://url.spec.whatwg.org/#fragment-percent-encode-set
+export function isFragmentPercentEncode(c: number): boolean {
+  switch (c) {
+    case 32 /*' '*/:
+    case 34 /*'"'*/:
+    case 60 /*'<'*/:
+    case 62 /*'>'*/:
+    case 96 /*'`'*/:
+      return true;
+    default:
+      return isC0ControlPercentEncode(c);
+  }
+}
+
+// https://url.spec.whatwg.org/#query-percent-encode-set
+export function isQueryPercentEncode(c: number): boolean {
+  switch (c) {
+    case 32 /*' '*/:
+    case 34 /*'"'*/:
+    case 35 /*'#'*/:
+    case 60 /*'<'*/:
+    case 62 /*'>'*/:
+      return true;
+    default:
+      return isC0ControlPercentEncode(c);
+  }
+}
+
+// https://url.spec.whatwg.org/#special-query-percent-encode-set
+export function isSpecialQueryPercentEncode(c: number): boolean {
+  return isQueryPercentEncode(c) || c === 39 /*"'"*/;
+}
+
+// https://url.spec.whatwg.org/#path-percent-encode-set
+export function isPathPercentEncode(c: number): boolean {
+  switch (c) {
+    case 63 /*'?'*/:
+    case 94 /*'^'*/:
+    case 96 /*'`'*/:
+    case 123 /*'{'*/:
+    case 125 /*'}'*/:
+      return true;
+    default:
+      return isQueryPercentEncode(c);
+  }
+}
+
+// https://url.spec.whatwg.org/#userinfo-percent-encode-set
+export function isUserinfoPercentEncode(c: number): boolean {
+  switch (c) {
+    case 47 /*'/'*/:
+    case 58 /*':'*/:
+    case 59 /*';'*/:
+    case 61 /*'='*/:
+    case 64 /*'@'*/:
+    case 91 /*'['*/:
+    case 92 /*'\\'*/:
+    case 93 /*']'*/:
+    case 124 /*'|'*/:
+      return true;
+    default:
+      return isPathPercentEncode(c);
+  }
+}
+
+// https://url.spec.whatwg.org/#component-percent-encode-set
+export function isComponentPercentEncode(c: number): boolean {
+  switch (c) {
+    case 36 /*'$'*/:
+    case 37 /*'%'*/:
+    case 38 /*'&'*/:
+    case 43 /*'+'*/:
+    case 44 /*','*/:
+      return true;
+    default:
+      return isUserinfoPercentEncode(c);
+  }
+}
+
+// https://url.spec.whatwg.org/#application-x-www-form-urlencoded-percent-encode-set
+export function isURLEncodedPercentEncode(c: number): boolean {
+  switch (c) {
+    case 33 /*'!'*/:
+    case 39 /*"'"*/:
+    case 40 /*'('*/:
+    case 41 /*')'*/:
+    case 126 /*'~'*/:
+      return true;
+    default:
+      return isComponentPercentEncode(c);
+  }
+}
+
+// https://url.spec.whatwg.org/#code-point-percent-encode-after-encoding
+// https://url.spec.whatwg.org/#utf-8-percent-encode
+// Assuming encoding is always utf-8 allows us to trim one of the logic branches. TODO: support encoding.
+// The "-Internal" variant here has code points as JS strings. The external version used by other files has code points
+// as JS numbers, like the rest of the codebase.
+export function utf8PercentEncodeCodePoint(
+  codePoint: number | undefined,
+  percentEncodePredicate: (c: number) => boolean
+): string {
+  const bytes = utf8Encode(String.fromCodePoint(codePoint || 0));
+  let output = '';
+  for (let idx = 0; idx < bytes.length; idx++)
+    output += percentEncodePredicate(bytes[idx])
+      ? percentEncode(bytes[idx])
+      : String.fromCharCode(bytes[idx]);
+  return output;
+}
+
+// https://url.spec.whatwg.org/#string-percent-encode-after-encoding
+// https://url.spec.whatwg.org/#string-utf-8-percent-encode
+export function utf8PercentEncodeString(
+  input: string,
+  percentEncodePredicate: (c: number) => boolean,
+  spaceAsPlus = false
+) {
+  const bytes = utf8Encode(input);
+  let output = '';
+  for (let idx = 0; idx < bytes.length; idx++) {
+    if (spaceAsPlus && bytes[idx] === 32 /*' '*/) {
+      output += '+';
+    } else {
+      output += percentEncodePredicate(bytes[idx])
+        ? percentEncode(bytes[idx])
+        : String.fromCharCode(bytes[idx]);
+    }
+  }
+  return output;
+}
+
+// See: https://github.com/jsdom/whatwg-url/blob/v15.1.0/lib/urlencoded.js
+
+function replacePlusByteWithSpace(bytes: Uint8Array): Uint8Array {
+  let fromIdx = 0;
+  let idx = 0;
+  while ((idx = bytes.indexOf(43 /*'+'*/, fromIdx)) > -1)
+    bytes[idx] = 32 /*' '*/;
+  return bytes;
+}
+
+// https://url.spec.whatwg.org/#concept-urlencoded-parser
+export function parseUrlencoded(input: Uint8Array): [string, string][] {
+  const entries: [string, string][] = [];
+  let lastIdx = 0;
+  let idx = 0;
+  while (idx < input.byteLength) {
+    idx = input.indexOf(38 /*'&'*/, lastIdx);
+    if (idx < 0) idx = input.byteLength;
+    const slice = input.subarray(lastIdx, idx);
+    lastIdx = idx + 1;
+    if (slice.byteLength === 0) {
+      continue;
+    }
+
+    let equalIdx = slice.indexOf(61 /*'='*/);
+    if (equalIdx < 0) equalIdx = slice.byteLength;
+
+    const name = replacePlusByteWithSpace(slice.slice(0, equalIdx));
+    const value = replacePlusByteWithSpace(slice.slice(equalIdx + 1));
+    const nameString = utf8Decode(percentDecodeBytes(name));
+    const valueString = utf8Decode(percentDecodeBytes(value));
+    entries.push([nameString, valueString]);
+  }
+  return entries;
+}
+
+// https://url.spec.whatwg.org/#concept-urlencoded-serializer
+export function serializeUrlencoded(entries: [string, string][]): string {
+  let output = '';
+  for (let idx = 0; idx < entries.length; idx++) {
+    const name = utf8PercentEncodeString(
+      entries[idx][0],
+      isURLEncodedPercentEncode,
+      true
+    );
+    const value = utf8PercentEncodeString(
+      entries[idx][1],
+      isURLEncodedPercentEncode,
+      true
+    );
+    output += idx !== 0 ? `&${name}=${value}` : `${name}=${value}`;
+  }
+  return output;
+}
+
+export function normalizeDomain(domain: string): string | null {
+  const labels = domain
+    .normalize('NFC')
+    .replace(/[\u3002\uFF0E\uFF61.]/g, '.')
+    .toLowerCase();
+  return !/[\x00-\x20%]/g.test(labels) ? labels : null;
+}
